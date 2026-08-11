@@ -1,165 +1,864 @@
 import streamlit as st
-import requests
 import pandas as pd
-from datetime import datetime
+import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
+from datetime import datetime, timedelta
 
-# --- Page Configuration ---
+# ============================================================
+# SA ENERGY MARKET & GRID RISK INTELLIGENCE PLATFORM
+# ============================================================
+
 st.set_page_config(
-    page_title="SA Energy Dashboard",
+    page_title="SA Energy Market & Grid Risk",
     page_icon="⚡",
     layout="wide"
 )
 
-# --- Title ---
-st.title("⚡ South African Energy Dashboard")
-st.caption("Built by Gift Makoloi | MSc Financial Engineering Candidate")
-st.markdown("---")
-
-# --- 1. LIVE LOAD-SHEDDING STATUS (Simple API) ---
-st.header("📢 Live Load-shedding Status")
-
-ESKOM_STATUS_URL = "https://loadshedding.eskom.co.za/LoadShedding/GetStatus"
-
-try:
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-    response = requests.get(ESKOM_STATUS_URL, headers=headers, timeout=10)
-    
-    if response.status_code == 200:
-        raw_status = response.text.strip()
-        
-        if raw_status == "0":
-            stage_display = "No Load-shedding 😊"
-            stage_value = "0"
-        elif raw_status in ["1", "2", "3", "4", "5", "6", "7", "8"]:
-            stage_display = f"Stage {raw_status} ⚠️"
-            stage_value = raw_status
-        else:
-            stage_display = f"Unknown status: {raw_status}"
-            stage_value = "Unknown"
-        
-        last_updated = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
-        col1, col2 = st.columns(2)
-        col1.metric("Current Stage", stage_display)
-        col2.metric("Last Updated", last_updated)
-        
-        if stage_value not in ["0", "Unknown"]:
-            st.warning(f"⚠️ Load-shedding Stage {stage_value} is currently active. Plan accordingly.")
-        else:
-            st.success("✅ No load-shedding currently reported.")
-    else:
-        st.error(f"⚠️ Could not fetch load-shedding status. API returned status code: {response.status_code}")
-
-except Exception as e:
-    st.warning(f"⚠️ Could not fetch load-shedding data: {e}")
+st.title("⚡ SA Energy Market & Grid Risk Intelligence")
+st.caption(
+    "Built by Gift Makoloi | MSc Financial Engineering Candidate | "
+    "Energy Analytics • Monte Carlo • Risk Modelling"
+)
 
 st.markdown("---")
 
-# --- 2. SUBURB SCHEDULE LOOKUP (Using Eskom API Structure) ---
-st.header("🔍 Load-Shedding Schedule Lookup")
-st.caption("Find out when your area will be affected by load-shedding.")
+st.info(
+    "Educational quantitative-energy model. "
+    "The simulated outputs are not official Eskom forecasts."
+)
 
-# --- Province Selection (Static Keys) ---
-provinces = {
-    "1": "Eastern Cape",
-    "2": "Free State",
-    "3": "Gauteng",
-    "4": "KwaZulu-Natal",
-    "5": "Limpopo",
-    "6": "Mpumalanga",
-    "7": "North West",
-    "8": "Northern Cape",
-    "9": "Western Cape"
-}
+# ============================================================
+# SIDEBAR
+# ============================================================
 
-# --- Municipalities for Gauteng (Province ID: 3) ---
-# In a real implementation, you would fetch this dynamically from the API
-gauteng_municipalities = {
-    "306": "City of Johannesburg (Eskom-supplied zones)",
-    "307": "City of Tshwane (Eskom-supplied zones)",
-    "305": "Ekurhuleni Metropolitan Municipality",
-    "304": "Emfuleni Local Municipality",
-    "308": "Lesedi Local Municipality",
-    "309": "Mogale City Local Municipality",
-    "310": "Merafong City Local Municipality",
-    "311": "Rand West City Local Municipality"
-}
+st.sidebar.header("⚙️ Model Configuration")
 
-# --- Build the lookup interface ---
-col1, col2, col3 = st.columns(3)
+simulation_years = st.sidebar.slider(
+    "Forecast Horizon (Years)",
+    1,
+    10,
+    5
+)
+
+num_simulations = st.sidebar.selectbox(
+    "Monte Carlo Simulations",
+    [500, 1000, 2500, 5000],
+    index=1
+)
+
+seed = st.sidebar.number_input(
+    "Simulation Seed",
+    1,
+    999999,
+    42
+)
+
+st.sidebar.markdown("---")
+
+st.sidebar.header("🏭 Grid Assumptions")
+
+base_demand = st.sidebar.number_input(
+    "Current Annual Electricity Demand (GWh)",
+    min_value=1000,
+    max_value=500000,
+    value=220000,
+    step=1000
+)
+
+demand_growth = (
+    st.sidebar.slider(
+        "Annual Demand Growth (%)",
+        0.0,
+        10.0,
+        2.0,
+        0.5
+    ) / 100
+)
+
+coal_share = (
+    st.sidebar.slider(
+        "Coal Generation Share (%)",
+        30.0,
+        90.0,
+        70.0,
+        1.0
+    ) / 100
+)
+
+renewable_share = (
+    st.sidebar.slider(
+        "Renewable Generation Share (%)",
+        5.0,
+        60.0,
+        20.0,
+        1.0
+    ) / 100
+)
+
+generation_volatility = (
+    st.sidebar.slider(
+        "Generation Volatility (%)",
+        2.0,
+        30.0,
+        10.0,
+        1.0
+    ) / 100
+)
+
+st.sidebar.markdown("---")
+
+st.sidebar.header("💰 Electricity Economics")
+
+current_tariff = st.sidebar.number_input(
+    "Current Electricity Tariff (R/kWh)",
+    min_value=0.10,
+    max_value=10.00,
+    value=2.50,
+    step=0.05
+)
+
+tariff_growth = (
+    st.sidebar.slider(
+        "Expected Tariff Growth (%)",
+        0.0,
+        20.0,
+        8.0,
+        0.5
+    ) / 100
+)
+
+tariff_volatility = (
+    st.sidebar.slider(
+        "Tariff Volatility (%)",
+        1.0,
+        30.0,
+        8.0,
+        1.0
+    ) / 100
+)
+
+st.sidebar.markdown("---")
+
+st.sidebar.header("🏢 Business Exposure")
+
+monthly_consumption = st.sidebar.number_input(
+    "Monthly Electricity Consumption (kWh)",
+    min_value=100,
+    max_value=10_000_000,
+    value=20_000,
+    step=100
+)
+
+backup_cost = st.sidebar.number_input(
+    "Backup Generation Cost (R/kWh)",
+    min_value=0.0,
+    max_value=20.0,
+    value=4.50,
+    step=0.10
+)
+
+# ============================================================
+# GENERATE HISTORICAL-STYLE ENERGY DATA
+# ============================================================
+
+rng = np.random.default_rng(seed)
+
+days = 365
+
+dates = pd.date_range(
+    end=datetime.now(),
+    periods=days,
+    freq="D"
+)
+
+# Seasonal demand pattern
+seasonality = (
+    1
+    + 0.08 * np.sin(
+        np.arange(days) * 2 * np.pi / 365
+    )
+)
+
+random_demand = rng.normal(
+    0,
+    0.025,
+    days
+)
+
+demand = (
+    base_demand / 365
+    * seasonality
+    * (1 + random_demand)
+)
+
+# Renewable generation
+renewable_output = (
+    renewable_share
+    * demand
+    * (
+        1
+        + rng.normal(
+            0,
+            generation_volatility,
+            days
+        )
+    )
+)
+
+renewable_output = np.maximum(
+    renewable_output,
+    0
+)
+
+# Coal generation
+coal_output = (
+    coal_share
+    * demand
+    * (
+        1
+        + rng.normal(
+            0,
+            generation_volatility / 2,
+            days
+        )
+    )
+)
+
+coal_output = np.maximum(
+    coal_output,
+    0
+)
+
+# Other generation
+other_output = np.maximum(
+    demand
+    - renewable_output
+    - coal_output,
+    0
+)
+
+energy_df = pd.DataFrame({
+    "Date": dates,
+    "Demand (GWh)": demand,
+    "Coal (GWh)": coal_output,
+    "Renewables (GWh)": renewable_output,
+    "Other (GWh)": other_output
+})
+
+# ============================================================
+# GRID RISK MODEL
+# ============================================================
+
+energy_df["Available Generation"] = (
+    energy_df[
+        [
+            "Coal (GWh)",
+            "Renewables (GWh)",
+            "Other (GWh)"
+        ]
+    ].sum(axis=1)
+)
+
+energy_df["Reserve Margin"] = (
+    (
+        energy_df["Available Generation"]
+        - energy_df["Demand (GWh)"]
+    )
+    / energy_df["Demand (GWh)"]
+)
+
+# Risk score
+energy_df["Grid Risk Score"] = np.clip(
+    100
+    - energy_df["Reserve Margin"] * 100,
+    0,
+    100
+)
+
+# ============================================================
+# DASHBOARD METRICS
+# ============================================================
+
+st.header("📊 Grid Health Dashboard")
+
+latest = energy_df.iloc[-1]
+
+col1, col2, col3, col4 = st.columns(4)
 
 with col1:
-    selected_province_key = st.selectbox(
-        "Select Province",
-        options=list(provinces.keys()),
-        format_func=lambda x: provinces[x]
+    st.metric(
+        "Estimated Demand",
+        f"{latest['Demand (GWh)']:,.0f} GWh"
     )
-    st.caption(f"Province ID: {selected_province_key}")
 
 with col2:
-    # For now, only Gauteng has municipality data. This will expand later.
-    if selected_province_key == "3":
-        selected_municipality_key = st.selectbox(
-            "Select Municipality",
-            options=list(gauteng_municipalities.keys()),
-            format_func=lambda x: gauteng_municipalities[x]
-        )
-        st.caption(f"Municipality ID: {selected_municipality_key}")
-    else:
-        st.selectbox(
-            "Select Municipality",
-            options=["Data not yet available for this province"],
-            disabled=True
-        )
-        selected_municipality_key = None
+    st.metric(
+        "Available Generation",
+        f"{latest['Available Generation']:,.0f} GWh"
+    )
 
 with col3:
-    # Placeholder for suburb selection
-    if selected_municipality_key:
-        # In a real implementation, you would fetch suburbs from the API
-        # using the municipality ID
-        st.text_input(
-            "Enter Suburb Name (e.g., Sandton, Soweto, Midrand)",
-            placeholder="Type suburb name..."
-        )
+    st.metric(
+        "Reserve Margin",
+        f"{latest['Reserve Margin'] * 100:.1f}%"
+    )
+
+with col4:
+
+    risk = latest["Grid Risk Score"]
+
+    if risk < 30:
+        label = "LOW"
+    elif risk < 60:
+        label = "MODERATE"
     else:
-        st.text_input(
-            "Enter Suburb Name",
-            placeholder="Select a province and municipality first",
-            disabled=True
+        label = "HIGH"
+
+    st.metric(
+        "Grid Risk",
+        label,
+        f"{risk:.1f}/100"
+    )
+
+# ============================================================
+# GENERATION MIX
+# ============================================================
+
+st.markdown("---")
+
+st.header("⚡ Estimated Generation Mix")
+
+generation_totals = pd.DataFrame({
+    "Source": [
+        "Coal",
+        "Renewables",
+        "Other"
+    ],
+    "Generation": [
+        energy_df["Coal (GWh)"].sum(),
+        energy_df["Renewables (GWh)"].sum(),
+        energy_df["Other (GWh)"].sum()
+    ]
+})
+
+fig_mix = px.pie(
+    generation_totals,
+    names="Source",
+    values="Generation",
+    title="Estimated Electricity Generation Mix"
+)
+
+st.plotly_chart(
+    fig_mix,
+    use_container_width=True
+)
+
+# ============================================================
+# DEMAND VS GENERATION
+# ============================================================
+
+st.header("📈 Demand vs Available Generation")
+
+fig_generation = go.Figure()
+
+fig_generation.add_trace(
+    go.Scatter(
+        x=energy_df["Date"],
+        y=energy_df["Demand (GWh)"],
+        name="Demand"
+    )
+)
+
+fig_generation.add_trace(
+    go.Scatter(
+        x=energy_df["Date"],
+        y=energy_df["Available Generation"],
+        name="Available Generation"
+    )
+)
+
+fig_generation.update_layout(
+    height=500,
+    title="Electricity Supply-Demand Relationship",
+    yaxis_title="GWh"
+)
+
+st.plotly_chart(
+    fig_generation,
+    use_container_width=True
+)
+
+# ============================================================
+# RENEWABLE VARIABILITY
+# ============================================================
+
+st.header("☀️ Renewable Energy Variability")
+
+fig_renewables = px.line(
+    energy_df,
+    x="Date",
+    y="Renewables (GWh)",
+    title="Simulated Renewable Generation"
+)
+
+fig_renewables.update_layout(
+    height=450
+)
+
+st.plotly_chart(
+    fig_renewables,
+    use_container_width=True
+)
+
+# ============================================================
+# GRID RISK
+# ============================================================
+
+st.header("🚨 Grid Risk Indicator")
+
+fig_risk = px.line(
+    energy_df,
+    x="Date",
+    y="Grid Risk Score",
+    title="Estimated Grid Stress / Risk Score"
+)
+
+fig_risk.add_hline(
+    y=60,
+    line_dash="dash",
+    annotation_text="High Risk Threshold"
+)
+
+fig_risk.update_layout(
+    height=450,
+    yaxis_range=[0, 100]
+)
+
+st.plotly_chart(
+    fig_risk,
+    use_container_width=True
+)
+
+# ============================================================
+# MONTE CARLO ENERGY FORECAST
+# ============================================================
+
+st.markdown("---")
+
+st.header("🎲 Monte Carlo Energy Market Forecast")
+
+forecast_results = []
+
+for simulation in range(num_simulations):
+
+    simulated_demand = base_demand
+    simulated_tariff = current_tariff
+
+    total_cost = 0
+    shortage_days = 0
+
+    for year in range(simulation_years):
+
+        demand_shock = rng.normal(
+            demand_growth,
+            0.015
         )
 
-st.caption("ℹ️ Note: This is a demonstration of the API structure. A full implementation would include dynamic fetching of municipalities and suburbs from Eskom's servers.")
+        tariff_shock = rng.normal(
+            tariff_growth,
+            tariff_volatility
+        )
 
-st.markdown("---")
+        simulated_demand *= (
+            1 + demand_shock
+        )
 
-# --- 3. ENERGY GENERATION MIX (Static Data) ---
-st.header("📊 South Africa Energy Generation Mix")
-st.caption("Data source: Eskom (2023/2024 annual report - approximate values)")
+        simulated_tariff *= (
+            1 + tariff_shock
+        )
 
-data = {
-    "Source": ["Coal", "Renewables", "Nuclear", "Gas/Diesel", "Other"],
-    "Percentage": [70, 15, 8, 5, 2]
-}
-df = pd.DataFrame(data)
+        annual_consumption = (
+            monthly_consumption
+            * 12
+            * (
+                simulated_demand
+                / base_demand
+            )
+        )
 
-col1, col2 = st.columns([2, 1])
+        electricity_cost = (
+            annual_consumption
+            * simulated_tariff
+        )
+
+        # Estimate shortage probability
+        reserve_margin = (
+            renewable_share
+            * (
+                1
+                + rng.normal(
+                    0,
+                    generation_volatility
+                )
+            )
+            + coal_share
+            - 0.90
+        )
+
+        if reserve_margin < 0:
+            shortage_days += 30
+
+            backup_expense = (
+                annual_consumption
+                * 0.10
+                * backup_cost
+            )
+
+            electricity_cost += backup_expense
+
+        total_cost += electricity_cost
+
+    forecast_results.append({
+        "Simulation": simulation + 1,
+        "Total Energy Cost": total_cost,
+        "Final Tariff": simulated_tariff,
+        "Shortage Days": shortage_days,
+        "Final Demand": simulated_demand
+    })
+
+forecast_df = pd.DataFrame(
+    forecast_results
+)
+
+# ============================================================
+# MONTE CARLO METRICS
+# ============================================================
+
+cost_median = forecast_df[
+    "Total Energy Cost"
+].median()
+
+cost_p10 = np.percentile(
+    forecast_df["Total Energy Cost"],
+    10
+)
+
+cost_p90 = np.percentile(
+    forecast_df["Total Energy Cost"],
+    90
+)
+
+shortage_probability = np.mean(
+    forecast_df["Shortage Days"] > 0
+)
+
+col1, col2, col3, col4 = st.columns(4)
+
 with col1:
-    st.bar_chart(df.set_index("Source"))
+    st.metric(
+        "Median Energy Cost",
+        f"R{cost_median:,.0f}"
+    )
+
 with col2:
-    st.dataframe(df, hide_index=True)
+    st.metric(
+        "10th Percentile",
+        f"R{cost_p10:,.0f}"
+    )
+
+with col3:
+    st.metric(
+        "90th Percentile",
+        f"R{cost_p90:,.0f}"
+    )
+
+with col4:
+    st.metric(
+        "Shortage Probability",
+        f"{shortage_probability * 100:.1f}%"
+    )
+
+# ============================================================
+# COST DISTRIBUTION
+# ============================================================
+
+st.subheader("💰 Distribution of Future Energy Costs")
+
+fig_cost = px.histogram(
+    forecast_df,
+    x="Total Energy Cost",
+    nbins=60,
+    title="Monte Carlo Distribution of Cumulative Energy Costs"
+)
+
+fig_cost.add_vline(
+    x=cost_median,
+    line_dash="dash",
+    annotation_text="Median"
+)
+
+fig_cost.update_layout(
+    height=500,
+    xaxis_title="Cumulative Electricity Cost (R)"
+)
+
+st.plotly_chart(
+    fig_cost,
+    use_container_width=True
+)
+
+# ============================================================
+# TARIFF FORECAST
+# ============================================================
+
+st.subheader("📊 Future Electricity Tariff Distribution")
+
+fig_tariff = px.histogram(
+    forecast_df,
+    x="Final Tariff",
+    nbins=50,
+    title="Simulated Electricity Tariff at Forecast Horizon"
+)
+
+fig_tariff.update_layout(
+    height=450,
+    xaxis_title="Final Tariff (R/kWh)"
+)
+
+st.plotly_chart(
+    fig_tariff,
+    use_container_width=True
+)
+
+# ============================================================
+# RISK ANALYSIS
+# ============================================================
+
+st.header("📉 Energy Financial Risk")
+
+var_95 = np.percentile(
+    forecast_df["Total Energy Cost"],
+    95
+)
+
+expected_shortfall = forecast_df[
+    forecast_df["Total Energy Cost"] >= var_95
+]["Total Energy Cost"].mean()
+
+risk_col1, risk_col2, risk_col3 = st.columns(3)
+
+with risk_col1:
+    st.metric(
+        "95% Cost VaR",
+        f"R{var_95:,.0f}"
+    )
+
+with risk_col2:
+    st.metric(
+        "Expected Shortfall",
+        f"R{expected_shortfall:,.0f}"
+    )
+
+with risk_col3:
+    st.metric(
+        "Cost Volatility",
+        f"R{forecast_df['Total Energy Cost'].std():,.0f}"
+    )
+
+st.write(
+    """
+**Value-at-Risk (VaR)** estimates the energy-cost level that is
+exceeded in approximately 5% of simulated scenarios.
+
+**Expected Shortfall** estimates the average cost within those
+extreme 5% scenarios.
+
+These metrics connect the electricity problem directly to
+quantitative financial risk management.
+"""
+)
+
+# ============================================================
+# ENERGY COST SENSITIVITY
+# ============================================================
+
+st.header("🔬 Energy Cost Sensitivity")
+
+sensitivity_values = []
+
+tariff_scenarios = [
+    -0.20,
+    -0.10,
+    0,
+    0.10,
+    0.20,
+    0.30
+]
+
+for change in tariff_scenarios:
+
+    scenario_tariff = (
+        current_tariff
+        * (1 + change)
+    )
+
+    annual_cost = (
+        monthly_consumption
+        * 12
+        * scenario_tariff
+    )
+
+    sensitivity_values.append({
+        "Tariff Change": change,
+        "Tariff": scenario_tariff,
+        "Annual Cost": annual_cost
+    })
+
+sensitivity_df = pd.DataFrame(
+    sensitivity_values
+)
+
+fig_sensitivity = px.line(
+    sensitivity_df,
+    x="Tariff Change",
+    y="Annual Cost",
+    markers=True,
+    title="Annual Electricity Cost Sensitivity to Tariff Changes"
+)
+
+fig_sensitivity.update_layout(
+    height=450,
+    xaxis_tickformat=".0%",
+    yaxis_title="Annual Electricity Cost (R)"
+)
+
+st.plotly_chart(
+    fig_sensitivity,
+    use_container_width=True
+)
+
+# ============================================================
+# BUSINESS DECISION SUPPORT
+# ============================================================
 
 st.markdown("---")
 
-# --- 4. FUTURE FEATURES ---
-st.header("🔮 Features in Development")
-st.write("""
-- **Dynamic Municipality Fetching:** Automatically load municipalities based on the selected province.
-- **Suburb Search:** Type a suburb name and get its specific load-shedding schedule.
-- **Historical Trends:** View load-shedding patterns over the past month.
-- **Financial Impact Calculator:** Estimate the cost of load-shedding for your business.
-- **Notification Alerts:** Get reminded when your area is about to be affected.
-""")
+st.header("🧠 Financial Engineering Interpretation")
+
+if shortage_probability < 0.20:
+
+    risk_message = (
+        "The simulated probability of a supply-shortage scenario "
+        "is relatively low under the selected assumptions."
+    )
+
+elif shortage_probability < 0.50:
+
+    risk_message = (
+        "The model indicates a moderate probability of supply "
+        "stress. Energy resilience measures may deserve further "
+        "financial evaluation."
+    )
+
+else:
+
+    risk_message = (
+        "The model indicates a high probability of supply stress "
+        "under the selected assumptions."
+    )
+
+st.success(
+    f"""
+### Energy Risk Assessment
+
+{risk_message}
+
+**Median cumulative energy cost:**
+R{cost_median:,.0f}
+
+**95% cost VaR:**
+R{var_95:,.0f}
+
+**Expected Shortfall:**
+R{expected_shortfall:,.0f}
+
+**Estimated shortage probability:**
+{shortage_probability * 100:.1f}%
+
+The model demonstrates how electricity-system uncertainty can
+be transformed into measurable financial risk.
+"""
+)
+
+# ============================================================
+# PROJECT LIMITATIONS
+# ============================================================
+
+with st.expander("📚 Model Assumptions & Limitations"):
+
+    st.markdown(
+        """
+### Current model
+
+This application is a quantitative energy-risk prototype.
+
+It demonstrates:
+
+- stochastic electricity demand
+- renewable generation variability
+- supply-demand analysis
+- reserve-margin modelling
+- grid-risk scoring
+- electricity tariff uncertainty
+- Monte Carlo simulation
+- Value-at-Risk
+- Expected Shortfall
+- sensitivity analysis
+- business electricity-cost exposure
+
+### Important limitations
+
+The simulated generation and demand data are NOT official
+Eskom measurements.
+
+A production version should connect to verified sources such as:
+
+- Eskom
+- NERSA
+- South African government energy datasets
+- municipal electricity data
+- reputable electricity-market data providers
+
+The model also does not currently model:
+
+- individual power-station outages
+- transmission constraints
+- battery dispatch optimisation
+- weather forecasts
+- electricity-market clearing prices
+- exact municipal tariffs
+- load profiles by sector
+- wheeling agreements
+- embedded generation
+- rooftop solar
+- battery degradation
+- ancillary services
+- detailed Eskom system constraints
+        """
+    )
+
+# ============================================================
+# FOOTER
+# ============================================================
 
 st.markdown("---")
-st.caption("Built with ❤️ using Streamlit and Python by Gift Makoloi")
+
+st.caption(
+    "Built with Python • Streamlit • Pandas • NumPy • Plotly • "
+    "Monte Carlo Simulation • Energy Risk Analytics"
+)
+
+st.caption(
+    "SA Energy Market & Grid Risk Intelligence Platform"
+)
